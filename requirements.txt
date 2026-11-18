@@ -1,2 +1,4 @@
 fastapi
-uvicorn
+uvicorn[standard]
+asyncpg
+argon2-cffi
