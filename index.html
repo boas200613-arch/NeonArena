@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NeonArena Web</title>
+<style>
+  *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050817;color:#eafcff;font-family:Arial,sans-serif}
+  #game{display:block;width:100%;height:100%}
+  #hud{position:fixed;inset:14px 16px auto 16px;display:flex;justify-content:space-between;gap:12px;pointer-events:none;text-shadow:0 0 10px #00d9ff;font-weight:bold}
+  .panel{background:#071426cc;border:1px solid #13cfff88;border-radius:9px;padding:10px 13px;box-shadow:0 0 18px #00bfff22}
+  #crosshair{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);font-size:25px;color:#8ffcff;pointer-events:none;text-shadow:0 0 9px #00eaff}
+  #help{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);text-align:center;background:#071426dd;border:1px solid #13cfff66;padding:9px 14px;border-radius:8px;font-size:13px;max-width:95%;line-height:1.5}
+  #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle,#101d39dd,#02040dee);padding:20px}
+  #card{max-width:520px;text-align:center;background:#08152af2;border:1px solid #00d9ff99;border-radius:16px;padding:28px;box-shadow:0 0 45px #00bfff33}
+  h1{margin:0 0 8px;color:#65f5ff;letter-spacing:4px;text-shadow:0 0 18px #00dfff}
+  button{border:0;border-radius:8px;padding:13px 22px;background:linear-gradient(90deg,#00a9d8,#6d4cff);color:white;font-weight:bold;font-size:15px;cursor:pointer}
+  button:hover{filter:brightness(1.2)}small{color:#a8c9df}
+  #toast{position:fixed;top:23%;left:50%;transform:translateX(-50%);color:#8effff;font-weight:bold;text-shadow:0 0 12px #00eaff;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud">
+  <div class="panel">NEONARENA<br><span id="level">LEVEL 1</span></div>
+  <div class="panel">SCORE: <span id="score">0</span><br>ENERGY: <span id="energy">0</span></div>
+  <div class="panel">BOTS: <span id="bots">0</span><br>WEAPON: ENERGY BLASTER</div>
+</div>
+<div id="crosshair">+</div><div id="toast"></div>
+<div id="help">WASD = bewegen · Muis = kijken · Linkermuisknop = schieten · ESC = muis losmaken</div>
+<div id="overlay"><div id="card"><h1>NEONARENA</h1><p>De browser-editie is klaar om te starten.</p><p><small>Verzamel energie, versla de bots en speel steeds moeilijkere levels.</small></p><button id="start">START GAME</button></div></div>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+const canvas=document.querySelector('#game');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x050817);
+scene.fog=new THREE.Fog(0x050817,22,58);
+const camera=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,.1,100);
+camera.position.set(0,1.7,8);
+const player={health:100,score:0,energy:0,level:1};
+const keys={};let yaw=0,pitch=0,playing=false,lastShot=0,shots=[],bots=[],orbs=[],toastTimer=0;
+const clock=new THREE.Clock();
+
+scene.add(new THREE.HemisphereLight(0x8bdcff,0x17102d,1.5));
+const light=new THREE.PointLight(0x00cfff,35,30);light.position.set(0,8,0);scene.add(light);
+const floor=new THREE.Mesh(new THREE.PlaneGeometry(42,42),new THREE.MeshStandardMaterial({color:0x101a32,metalness:.55,roughness:.55}));
+floor.rotation.x=-Math.PI/2;floor.position.y=0;scene.add(floor);
+const grid=new THREE.GridHelper(42,42,0x00cfff,0x173a65);grid.position.y=.015;scene.add(grid);
+function wall(x,y,z,sx,sy,sz,color=0x10264a){
+ const m=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),new THREE.MeshStandardMaterial({color,emissive:0x06152a,metalness:.6}));
+ m.position.set(x,y,z);scene.add(m);
+ const edge=new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),new THREE.LineBasicMaterial({color:0x00dfff}));edge.position.copy(m.position);scene.add(edge);
+}
+wall(0,2,-21,42,4,1);wall(0,2,21,42,4,1);wall(-21,2,0,1,4,42);wall(21,2,0,1,4,42);
+for(let i=0;i<12;i++){const a=i*Math.PI/6;const p=new THREE.Mesh(new THREE.CylinderGeometry(.35,.55,2.2,6),new THREE.MeshStandardMaterial({color:0x192b50,emissive:0x071b38}));p.position.set(Math.cos(a)*13,1.1,Math.sin(a)*13);scene.add(p);}
+const playerLight=new THREE.PointLight(0x00ddff,2,7);camera.add(playerLight);scene.add(camera);
+function makeBot(x,z,hp=100,type='normal'){
+ const group=new THREE.Group();group.position.set(x,0,z);scene.add(group);
+ const color=type==='boss'?0xff315f:type==='strong'?0xff9d35:0xe82cff;
+ const body=new THREE.Mesh(new THREE.BoxGeometry(1,1.35,.8),new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.28,metalness:.35}));
+ body.position.y=.85;group.add(body);
+ const eye=new THREE.Mesh(new THREE.BoxGeometry(.55,.13,.08),new THREE.MeshBasicMaterial({color:0x9effff}));eye.position.set(0,1.05,-.43);group.add(eye);
+ const back=new THREE.Mesh(new THREE.BoxGeometry(1.25,.12,.08),new THREE.MeshBasicMaterial({color:0x400b20}));back.position.set(0,1.75,0);group.add(back);
+ const fill=new THREE.Mesh(new THREE.BoxGeometry(1.2,.08,.09),new THREE.MeshBasicMaterial({color:0x27ff8a}));fill.position.set(0,1.77,-.01);group.add(fill);
+ bots.push({group,hp,maxHp:hp,type,fill,phase:Math.random()*6,speed:1+Math.random()*.6});
+}
+function spawnLevel(){
+ bots.forEach(b=>scene.remove(b.group));bots=[];orbs.forEach(o=>scene.remove(o.mesh));orbs=[];
+ const count=Math.min(3+player.level,12);
+ for(let i=0;i<count;i++){let type='normal',hp=100;if(player.level>=5&&i%4===3){type='strong';hp=200;}if(player.level>=10&&i===count-1){type='boss';hp=500;}makeBot((Math.random()-.5)*25,(Math.random()-.5)*25,hp,type);}
+ for(let i=0;i<Math.min(8+player.level,18);i++){const mesh=new THREE.Mesh(new THREE.IcosahedronGeometry(.32,1),new THREE.MeshStandardMaterial({color:0x00f5ff,emissive:0x00cfff,emissiveIntensity:1.5}));mesh.position.set((Math.random()-.5)*34,.65,(Math.random()-.5)*34);scene.add(mesh);orbs.push({mesh,phase:Math.random()*6});}
+ updateHud();
+}
+function updateHud(){document.querySelector('#level').textContent='LEVEL '+player.level;document.querySelector('#score').textContent=player.score;document.querySelector('#energy').textContent=player.energy;document.querySelector('#bots').textContent=bots.filter(b=>b.hp>0).length;}
+function showToast(t){const el=document.querySelector('#toast');el.textContent=t;toastTimer=1.8;}
+function shoot(){
+ const now=performance.now()/1000;if(now-lastShot<.32)return;lastShot=now;
+ const dir=new THREE.Vector3();camera.getWorldDirection(dir);
+ const mesh=new THREE.Mesh(new THREE.SphereGeometry(.12,8,8),new THREE.MeshBasicMaterial({color:0x65faff}));
+ mesh.position.copy(camera.position).addScaledVector(dir,.8);scene.add(mesh);shots.push({mesh,dir,life:1.6});
+}
+function damageBot(bot,damage){
+ bot.hp=Math.max(0,bot.hp-damage);const f=bot.hp/bot.maxHp;bot.fill.scale.x=Math.max(.001,f);bot.fill.position.x=-.6*(1-f);
+ if(bot.hp<=0){scene.remove(bot.group);player.score+=bot.type==='boss'?100:bot.type==='strong'?30:10;player.energy+=bot.type==='boss'?100:bot.type==='strong'?30:15;showToast(bot.type.toUpperCase()+' BOT DEFEATED!');updateHud();if(bots.every(b=>b.hp<=0)){player.level++;showToast('LEVEL COMPLETE!');setTimeout(spawnLevel,1300);}}
+ updateHud();
+}
+function start(){playing=true;document.querySelector('#overlay').style.display='none';canvas.requestPointerLock?.();spawnLevel();camera.position.set(0,1.7,8);}
+document.querySelector('#start').addEventListener('click',start);
+document.addEventListener('pointerlockchange',()=>{if(document.pointerLockElement!==canvas&&playing){/* ESC releases mouse; click canvas to recapture */}});
+canvas.addEventListener('click',()=>{if(playing&&document.pointerLockElement!==canvas)canvas.requestPointerLock?.();});
+document.addEventListener('mousemove',e=>{if(document.pointerLockElement===canvas){yaw-=e.movementX*.002;pitch-=e.movementY*.002;pitch=Math.max(-1.35,Math.min(1.35,pitch));camera.rotation.set(pitch,yaw,0,'YXZ');}});
+document.addEventListener('keydown',e=>{keys[e.code]=true;if(['Space','ArrowUp','ArrowDown'].includes(e.code))e.preventDefault();});
+document.addEventListener('keyup',e=>keys[e.code]=false);
+document.addEventListener('mousedown',e=>{if(e.button===0&&playing&&document.pointerLockElement===canvas)shoot();});
+function loop(){
+ requestAnimationFrame(loop);const dt=Math.min(clock.getDelta(),.04);const t=clock.elapsedTime;
+ if(playing){
+  const forward=new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw)),right=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw));const move=new THREE.Vector3();
+  if(keys.KeyW||keys.ArrowUp)move.add(forward);if(keys.KeyS||keys.ArrowDown)move.sub(forward);if(keys.KeyD||keys.ArrowRight)move.add(right);if(keys.KeyA||keys.ArrowLeft)move.sub(right);
+  if(move.lengthSq())camera.position.addScaledVector(move.normalize(),7*dt);
+  camera.position.x=THREE.MathUtils.clamp(camera.position.x,-19.5,19.5);camera.position.z=THREE.MathUtils.clamp(camera.position.z,-19.5,19.5);
+  bots.forEach(b=>{if(b.hp<=0)return;const dx=camera.position.x-b.group.position.x,dz=camera.position.z-b.group.position.z,d=Math.hypot(dx,dz);if(d>2.3){b.group.position.x+=dx/d*b.speed*dt;b.group.position.z+=dz/d*b.speed*dt;}b.group.rotation.y=Math.atan2(dx,dz);});
+  orbs.forEach((o,i)=>{o.mesh.rotation.y+=dt*1.8;o.mesh.position.y=.65+Math.sin(t*2+o.phase)*.16;if(o.mesh.position.distanceTo(camera.position)<1.15){scene.remove(o.mesh);orbs.splice(i,1);player.energy+=5;player.score+=5;updateHud();}});
+  shots.forEach((s,i)=>{s.mesh.position.addScaledVector(s.dir,28*dt);s.life-=dt;let hit=false;for(const b of bots){if(b.hp>0&&s.mesh.position.distanceTo(b.group.position.clone().add(new THREE.Vector3(0,.9,0)))<.85){damageBot(b,25);hit=true;break;}}if(hit||s.life<=0){scene.remove(s.mesh);shots.splice(i,1);}});
+ }
+ if(toastTimer>0){toastTimer-=dt;if(toastTimer<=0)document.querySelector('#toast').textContent='';}
+ renderer.render(scene,camera);
+}
+loop();
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+</script>
+</body>
+</html>
